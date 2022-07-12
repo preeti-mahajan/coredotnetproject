@@ -5,16 +5,53 @@ on:
     branches: [ "master" ]
   pull_request:
     branches: [ "master" ]
-
+env:
+  AZURE_CONTAINER_REGISTRY: "githubactionspov"
+  CONTAINER_NAME: "githubdemo/demoimage"
+  RESOURCE_GROUP: "GithubDemo"
+  CLUSTER_NAME: "aksdemogithub"
+  IMAGE_PULL_SECRET_NAME: "githubdemosecret"
+  DEPLOYMENT_MANIFEST_PATH: 'deployment.yaml'
+  
 jobs:
-
   build:
-
     runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
 
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [ 'csharp' ]
+        # CodeQL supports [ 'cpp', 'csharp', 'go', 'java', 'javascript', 'python', 'ruby' ]
+        # Learn more about CodeQL language support at https://aka.ms/codeql-docs/language-support
     steps:
-      - uses: actions/checkout@v3
-      - name: ACR build
+      - name: 'Checkout Repository'
+        uses: actions/checkout@v3
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v2
+        with:
+          dotnet-version: 5.0.x
+      - name: Restore dependencies
+        run: dotnet restore
+      - name: Build
+        run: dotnet build --no-restore
+      - name: Test
+        run: dotnet test --no-build --verbosity normal
+      #- name: 'Dependency Review'
+      #  uses: actions/dependency-review-action@v1      
+      # Initializes the CodeQL tools for scanning.
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v2
+        with:
+          languages: ${{ matrix.language }}
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@v2
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v2
+      - name: ACR Push
         id: acr
         uses: azure/acr-build@v1
         with:
@@ -23,7 +60,85 @@ jobs:
           tenant: ${{ secrets.tenant }}
           registry: ${{ secrets.registry }}
           repository: ${{ secrets.repository }}
-          image: image1
+          image: demoimage
+          tag: ${{github.run_number}}
           git_access_token: ${{ secrets.git_access_token }}
           dockerfile: Dockerfile
           branch: master
+          
+  createSecret:
+    permissions:
+      contents: read
+      id-token: write
+    runs-on: ubuntu-latest
+    needs: [build]
+    steps:
+    # Logs in with your Azure credentials
+    - name: Azure login
+      uses: Azure/login@v1
+      with:
+        creds: '{"clientId":"${{ secrets.service_principal }}","clientSecret":"${{ secrets.service_principal_password }}","subscriptionId":"${{ secrets.subscription_id }}","tenantId":"${{ secrets.tenant }}"}'
+      
+    # Retrieves your Azure Kubernetes Service cluster's kubeconfig file
+    - name: Get K8s context
+      uses: azure/aks-set-context@v2.0
+      with:
+        resource-group: ${{ env.RESOURCE_GROUP }}
+        cluster-name: ${{ env.CLUSTER_NAME }}
+
+    # Retrieves the credentials for pulling images from your Azure Container Registry
+    - name: Get ACR credentials
+      run: |
+        az acr update -n ${{ env.AZURE_CONTAINER_REGISTRY }} -g ${{ env.RESOURCE_GROUP }} --admin-enabled true
+        ACR_USERNAME=$(az acr credential show -g ${{ env.RESOURCE_GROUP }} -n ${{ env.AZURE_CONTAINER_REGISTRY }} --query username -o tsv)
+        ACR_PASSWORD=$(az acr credential show -g ${{ env.RESOURCE_GROUP }} -n ${{ env.AZURE_CONTAINER_REGISTRY }} --query passwords[0].value -o tsv)
+        echo "::add-mask::${ACR_USERNAME}"
+        echo "::set-output name=username::${ACR_USERNAME}"
+        echo "::add-mask::${ACR_PASSWORD}"
+        echo "::set-output name=password::${ACR_PASSWORD}"
+      id: get-acr-creds
+
+    # Creates a kubernetes secret on your Azure Kubernetes Service cluster that matches up to the credentials from the last step
+    - name: Create K8s secret for pulling image from ACR
+      uses: Azure/k8s-create-secret@v1.1
+      with:
+        container-registry-url: ${{ env.AZURE_CONTAINER_REGISTRY }}.azurecr.io
+        container-registry-username: ${{ steps.get-acr-creds.outputs.username }}
+        container-registry-password: ${{ steps.get-acr-creds.outputs.password }}
+        secret-name: ${{ env.IMAGE_PULL_SECRET_NAME }}  
+
+  deploy:
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+    runs-on: ubuntu-latest
+    needs: [createSecret]
+    steps:
+    # Checks out the repository this file is in
+    - uses: actions/checkout@v3
+    
+    # Logs in with your Azure credentials
+    - name: Azure login
+      uses: Azure/login@v1
+      with:
+        creds: '{"clientId":"${{ secrets.service_principal }}","clientSecret":"${{ secrets.service_principal_password }}","subscriptionId":"${{ secrets.subscription_id }}","tenantId":"${{ secrets.tenant }}"}'
+      
+    # Retrieves your Azure Kubernetes Service cluster's kubeconfig file
+    - name: Get K8s context
+      uses: azure/aks-set-context@v2.0
+      with:
+        resource-group: ${{ env.RESOURCE_GROUP }}
+        cluster-name: ${{ env.CLUSTER_NAME }}
+
+    # Deploys application based on given manifest file
+    - name: Deploys application
+      uses: Azure/k8s-deploy@v3.1
+      with:
+        action: deploy
+        namespace: 'default'
+        manifests: ${{ env.DEPLOYMENT_MANIFEST_PATH }}
+        images: |
+          ${{ env.AZURE_CONTAINER_REGISTRY }}.azurecr.io/${{ env.CONTAINER_NAME }}:${{ github.run_number }}
+        imagepullsecrets: |
+          ${{ env.IMAGE_PULL_SECRET_NAME }}
