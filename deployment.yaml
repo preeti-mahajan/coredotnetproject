@@ -15,19 +15,14 @@ spec:
         app: coredotnetmultidockerdemo
     spec:
       containers:
-        - name: #{ContainerName}#
-          image: #{ContainerName}#.azurecr.io/#{RepositoryName}#:#{Build.BuildId}#  
-          imagePullPolicy: Always      
-          imagePullSecrets:
-            - name: #{PullSecretKey}#
+        - name: githubdemo
+          image: githubactionspov.azurecr.io/githubdemo/demoimage:23
+          command: ["printenv"]
+          imagePullPolicy: Always  
           ports:
             - name: http
               containerPort: 89
               protocol: TCP
-          nodeSelector:
-            beta.kubernetes.io/os: windows
-            kubernetes.io/role: agent
-            type: virtual-kubelet
 ---
 apiVersion: v1
 kind: Service
@@ -41,4 +36,3 @@ spec:
   - port: 80
   selector:
      k8s-app: coredotnetmultidockerdemo
-  app: coredotnetmultidockerdemo
