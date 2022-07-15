@@ -25,7 +25,7 @@ jobs:
       - name: Build with dotnet
         run: dotnet build --configuration Release
       - name: Test
-        run: dotnet test --collect "Code Coverage" --no-build --verbosity normal
+        run: dotnet test --collect "Code Coverage" --configuration Release
       - name: Run DevSkim scanner
         uses: microsoft/DevSkim-Action@v1
 
