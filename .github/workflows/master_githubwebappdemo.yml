@@ -50,6 +50,9 @@ jobs:
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v2
       
+      - name: Install dotnet sonarscanner
+        run: dotnet tool install --global dotnet-sonarscanner --version 5.0.x
+        
       - name: Analyze with SonarCloud  
         uses: SonarSource/sonarcloud-github-action@de2e56b42aa84d0b1c5b622644ac17e505c9a049
         env:
